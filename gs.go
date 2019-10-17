@@ -10,24 +10,30 @@ import (
 	"time"
 )
 
+const DefaultTimeout = 5 * time.Second
+
 type signalCh chan os.Signal
 type StopCh chan struct{}
 
 type GS struct {
+	timeout time.Duration
 	stopChQ []StopCh
 	srv     *http.Server
 	signal  signalCh
+	close   StopCh
 	done    StopCh
 }
 
-func NewGS(cap int) *GS {
+func NewGS(cap int, timeout time.Duration) *GS {
 	return &GS{
+		timeout: timeout,
 		// Package signal will not block sending to c: the caller must ensure
 		// that c has sufficient buffer space to keep up with the expected
 		// signal rate. For a channel used for notification of just one signal value,
 		// a buffer of size 1 is sufficient.
 		signal:  make(signalCh, 1),
 		stopChQ: make([]StopCh, 0, cap),
+		close:   make(StopCh),
 		done:    make(StopCh),
 	}
 }
@@ -46,8 +52,18 @@ func (gs *GS) SetServerAndWatch(srv *http.Server) {
 	go gs.Watch()
 }
 
+// @see http.Server.closeDoneChanLocked
 func (gs *GS) Break() {
-	close(gs.done)
+	select {
+	case <-gs.close:
+		// already closed, pass
+	default:
+		close(gs.close)
+	}
+}
+
+func (gs *GS) Wait() {
+	<-gs.done
 }
 
 // Watch should start/call in its own goroutine
@@ -60,9 +76,9 @@ func (gs *GS) Watch() {
 	// wait for signal or break
 	select {
 	case <-gs.signal:
-		// TODO synced close gs.done as in http.Server tracked listen socket done channel
+		// TODO synced close gs.close as in http.Server tracked listen socket done channel
 		break
-	case <-gs.done:
+	case <-gs.close:
 		return
 	}
 
@@ -98,4 +114,11 @@ func (gs *GS) Watch() {
 		// need no to send empty value
 		close(ch)
 	}
+
+	if (gs.timeout > 0) && (len(gs.stopChQ) > 0) {
+		time.Sleep(gs.timeout)
+	}
+
+	// send chignal "gs is finished"
+	close(gs.done)
 }
