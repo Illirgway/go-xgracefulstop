@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -21,6 +22,7 @@ type GS struct {
 	srv     *http.Server
 	signal  signalCh
 	close   StopCh
+	started	uint32
 	done    StopCh
 }
 
@@ -34,6 +36,7 @@ func NewGS(cap int, timeout time.Duration) *GS {
 		signal:  make(signalCh, 1),
 		stopChQ: make([]StopCh, 0, cap),
 		close:   make(StopCh),
+		started: 0,
 		done:    make(StopCh),
 	}
 }
@@ -49,7 +52,7 @@ func (gs *GS) Server(srv *http.Server) {
 func (gs *GS) SetServerAndWatch(srv *http.Server) {
 	gs.Server(srv)
 
-	go gs.Watch()
+	gs.Watch()
 }
 
 // @see http.Server.closeDoneChanLocked
@@ -63,11 +66,21 @@ func (gs *GS) Break() {
 }
 
 func (gs *GS) Wait() {
-	<-gs.done
+	// only if already started
+	if atomic.LoadUint32(&gs.started) != 0 {
+		<-gs.done
+	}
 }
 
 // Watch should start/call in its own goroutine
 func (gs *GS) Watch() {
+	// single-shot guard and "started" flag
+	if atomic.CompareAndSwapUint32(&gs.started, 0, 1) {
+		go gs.watch()
+	}
+}
+
+func (gs *GS) watch() {
 	// kill (no param) default send syscall.SIGTERM
 	// kill -2 is syscall.SIGINT
 	// kill -9 is syscall. SIGKILL but can"t be catch, so don't need add it
