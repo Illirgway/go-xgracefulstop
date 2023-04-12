@@ -16,7 +16,7 @@ gs := xgracefulstop.NewGS(1, xgracefulstop.DefaultTimeout)
 gs.Watch()
 
 // or with http.Server or similar
-gs.
+gs.SetServerAndWatch(s)
 
 // and now wait for gs
 gs.Wait()
